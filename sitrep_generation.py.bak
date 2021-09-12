@@ -1,0 +1,274 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Mon Dec 11 20:19:13 2017
+
+Module that creates and writes the SITREP as MS Word and appends monthly statistics from MS Excel spreadsheet
+
+@author: TYF
+"""
+
+import ConfigParser
+import datetime as dt
+from docx import Document
+from docx.shared import RGBColor
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from win32com import client
+import os
+
+
+
+def read_configuration():
+    '''Read configured values set by GUI user'''
+    Config = ConfigParser.ConfigParser()
+    Config.read('heavy_rain_sitrep.ini')
+    global date
+    date = dt.datetime.strptime(Config.get('Date', 'date'), '%d%m%y').strftime('%d %b %Y').replace('AM', 'am').replace('PM', 'pm').lstrip('0')
+    global rain_onset
+    rain_onset = dt.datetime.strptime(Config.get('Rain_Onset', 'rain_onset'), '%d%m%y %H%M').strftime('%I.%M %p').replace('AM', 'am').replace('PM', 'pm').lstrip('0')
+    global heaviest_start
+    heaviest_start = dt.datetime.strptime(Config.get('Period_of_Heaviest_Rain', 'heaviest_start'), '%d%m%y %H%M').strftime('%I.%M %p').replace('AM', 'am').replace('PM', 'pm').lstrip('0')
+    global heaviest_end
+    heaviest_end = dt.datetime.strptime(Config.get('Period_of_Heaviest_Rain', 'heaviest_end'), '%d%m%y %H%M').strftime('%I.%M %p').replace('AM', 'am').replace('PM', 'pm').lstrip('0')
+    global north 
+    north = Config.get('Affected_Areas', 'north')
+    global south
+    south = Config.get('Affected_Areas', 'south')
+    global east
+    east = Config.get('Affected_Areas', 'east')
+    global west
+    west = Config.get('Affected_Areas', 'west')
+    global central
+    central = Config.get('Affected_Areas', 'central')
+    global many
+    many = Config.get('Affected_Areas', 'many')
+    global most
+    most = Config.get('Affected_Areas', 'most')
+    global cause
+    cause = Config.get('Cause', 'cause')
+    global forecast
+    forecast = Config.get('Forecast', 'forecast')
+    global flood_reports
+    flood_reports = Config.get('Flood_Reports', 'flood_reports')
+    global remarks
+    remarks = Config.get('Remarks', 'remarks')
+    global issue_time
+    issue_time = dt.datetime.strptime(Config.get('Issue_Time','issue_time'), '%d%m%y %H%M').strftime('%I.%M %p').replace('AM', 'am').replace('PM', 'pm').lstrip('0')
+    global criteria_60min 
+    criteria_60min = Config.get('SITREP_Criteria', 'criteria_60min')
+    global criteria_30min 
+    criteria_30min = Config.get('SITREP_Criteria', 'criteria_30min')
+    global criteria_wind_gusts
+    criteria_wind_gusts = Config.get('SITREP_Criteria', 'criteria_wind_gusts')
+    global adhoc_request
+    adhoc_request = Config.get('Ad-Hoc_Request', 'adhoc_request')
+    global path_monthly_statistics
+    path_monthly_statistics = Config.get('Url_Path', 'path_monthly_statistics')
+    global path_sitrep
+    if not os.path.exists('Heavy_Rain_SITREP_Files'):
+        os.makedirs('Heavy_Rain_SITREP_Files')
+    filename = 'Heavy_Rain_SITREP_' + Config.get('Issue_Time', 'issue_time')[:6] + '_' + Config.get('Issue_Time', 'issue_time')[7:]  + '.docx'
+    path_sitrep = os.path.join('Heavy_Rain_SITREP_Files', filename)
+    Config_2 = ConfigParser.ConfigParser()
+    Config_2.read('heavy_rain_sitrep_defaults.ini')
+    global end_message
+    end_message = Config_2.get('Message', 'end_message')
+    
+
+def create_sitrep(rainfall_daily, rainfall_60min, rainfall_30min, wind_gusts):
+    '''Creates and writes MS Word document according to the rainfall and wind gusts data and GUI user-defined values'''
+    document = Document('heavy_rain_sitrep_template.docx')
+    for table in document.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                for paragraph in cell.paragraphs:
+                    if '*date*' in paragraph.text:
+                        paragraph.text = date
+                    if '*rain_onset*' in paragraph.text:
+                        paragraph.text = rain_onset
+                    if '*period_of_heaviest_rain*' in paragraph.text:
+                        paragraph.text = heaviest_start + ' - ' + heaviest_end
+                    if '*affected_areas*' in paragraph.text:
+                        if most == '1':
+                            paragraph.text = 'Most areas of Singapore'
+                        elif many == '1':
+                            paragraph.text = 'Many areas of Singapore'
+                        else:
+                            areas = ['northern', 'southern', 'eastern', 'western', 'central']
+                            affected = [int(x) for x in [north, south, east, west, central]]
+                            affected_areas = ''
+                            for i in range(len(affected)):
+                                if affected[i]:
+                                    affected_areas += ', ' + areas[i]
+                            if sum(affected) == 1:
+                                affected_areas_text = 'Mainly over ' + affected_areas[2:] + ' Singapore'
+                            else:
+                                last_comma_index = affected_areas.rfind(',')
+                                affected_areas_text = 'Mainly over ' + affected_areas[2:last_comma_index] + ' and' + affected_areas[last_comma_index+1:] + ' Singapore'
+                            paragraph.text = affected_areas_text
+                    if '*cause*' in paragraph.text:
+                        paragraph.text = cause                    
+                    if '*daily_rainfall*' in paragraph.text:
+                        paragraph.text = '%s / %s as at %s' %(rainfall_daily['rainfall'], rainfall_daily['station'], rainfall_daily['datetime'].strftime('%I.%M %p').replace('AM', 'am').replace('PM', 'pm').lstrip('0'))
+                    if '*60min_rainfall*' in paragraph.text:
+                        p = paragraph._element
+                        p.getparent().remove(p)
+                        if len(rainfall_60min[1]) > 0:
+                            p._p = p._element = None
+                            for i in range(len(rainfall_60min[1])):
+                                cell.add_paragraph()
+                                cell.paragraphs[i].paragraph_format.space_before = 0
+                                cell.paragraphs[i].paragraph_format.space_after = 0
+                                run_text = '%s / %s / %s - %s' %(rainfall_60min[1][i]['rainfall'], rainfall_60min[1][i]['station'], 
+                                                                   (rainfall_60min[1][i]['datetime']-dt.timedelta(minutes = 60)).strftime('%I.%M %p').replace('AM', 'am').replace('PM', 'pm').lstrip('0'), rainfall_60min[1][i]['datetime'].strftime('%I.%M %p').replace('AM', 'am').replace('PM', 'pm').lstrip('0'))
+                                run = cell.paragraphs[i].add_run(run_text)
+                                if rainfall_60min[1][i]['exceeded']:
+                                    font = run.font
+                                    font.color.rgb = RGBColor(255, 0, 0) 
+                        else:
+                            cell.add_paragraph()
+                    if '*30min_rainfall*' in paragraph.text:
+                        p = paragraph._element
+                        p.getparent().remove(p)
+                        p._p = p._element = None
+                        if len(rainfall_30min[1]) > 0:
+                            for i in range(len(rainfall_30min[1])):
+                                cell.add_paragraph()
+                                cell.paragraphs[i].paragraph_format.space_before = 0
+                                cell.paragraphs[i].paragraph_format.space_after = 0
+                                run_text = '%s / %s / %s - %s' %(rainfall_30min[1][i]['rainfall'], rainfall_30min[1][i]['station'], 
+                                                                   (rainfall_30min[1][i]['datetime']-dt.timedelta(minutes = 60)).strftime('%I.%M %p').replace('AM', 'am').replace('PM', 'pm').lstrip('0'), rainfall_30min[1][i]['datetime'].strftime('%I.%M %p').replace('AM', 'am').replace('PM', 'pm').lstrip('0'))                            
+                                run = cell.paragraphs[i].add_run(run_text)
+    
+                                if rainfall_30min[1][i]['exceeded']:
+                                    font = run.font
+                                    font.color.rgb = RGBColor(255, 0, 0)
+                        else:
+                            cell.add_paragraph()
+                    if '*wind_gusts*' in paragraph.text:
+                        p = paragraph._element
+                        p.getparent().remove(p)
+                        p._p = p._element = None
+                        if len(wind_gusts[1]) > 0:
+                            for i in range(len(wind_gusts[1])):
+                                cell.add_paragraph()
+                                cell.paragraphs[i].paragraph_format.space_before = 0
+                                cell.paragraphs[i].paragraph_format.space_after = 0
+                                run_text = '%s / %s / %s' %(wind_gusts[1][i]['wind_gusts'], wind_gusts[1][i]['station'], 
+                                                                   wind_gusts[1][i]['datetime'].strftime('%I.%M %p').replace('AM', 'am').replace('PM', 'pm').lstrip('0'))                            
+                                run = cell.paragraphs[i].add_run(run_text)
+                                if wind_gusts[1][i]['exceeded']:
+                                    font = run.font
+                                    font.color.rgb = RGBColor(255, 0, 0)
+                        else:
+                            cell.add_paragraph()
+                    if '*flood_reports*' in paragraph.text:
+                        paragraph.text = flood_reports
+                    if '*forecast*' in paragraph.text:
+                        paragraph.text = forecast                    
+                    if '*remarks*' in paragraph.text:
+                        paragraph.text = remarks
+                    if '*issue_statement*' in paragraph.text:
+                        p = paragraph._element
+                        p.getparent().remove(p)
+                        p._p = p._element = None
+                        cell.add_paragraph()
+                        cell.paragraphs[0].paragraph_format.space_before = 0
+                        cell.paragraphs[0].paragraph_format.space_after = 0
+                        run_text = 'Issued on %s at %s by Meteorological Service Singapore' %(date, issue_time)
+                        run = cell.paragraphs[0].add_run(run_text)
+                        run.bold = True
+                        cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+#                    if '*issue_criteria*' in paragraph.text:
+#                        p = paragraph._element
+#                        p.getparent().remove(p)
+#                        p._p = p._element = None
+#                        run_text = '- Rainfall in 60 minutes recorded is 70 mm or more'
+#                        run = cell.paragraphs[-1].add_run(run_text)
+#                        if rainfall_60min[0]:
+#                            run.font.color.rgb = RGBColor(255, 0, 0)
+#                        cell.add_paragraph()
+#                        run_text = '- Rainfall in 30 minutes recorded is 35 mm or more'
+#                        run = cell.paragraphs[-1].add_run(run_text)
+#                        if rainfall_30min[0]:
+#                            run.font.color.rgb = RGBColor(255, 0, 0)
+#                        cell.add_paragraph()
+#                        run_text = '- Wind gusts of more than 55 km/h are recorded'
+#                        run = cell.paragraphs[-1].add_run(run_text)
+#                        if wind_gusts[0]:
+#                            run.font.color.rgb = RGBColor(255, 0, 0)
+#                        cell.add_paragraph()
+#                        run_text = '- Ad-hoc request by agency eg. PUB'
+#                        run = cell.paragraphs[-1].add_run(run_text)
+#                        if adhoc_request == '1':
+#                            run.font.color.rgb = RGBColor(255, 0, 0)
+#                        for paragraph in cell.paragraphs:
+#                            paragraph.paragraph_format.space_before = 0
+#                            paragraph.paragraph_format.space_after = 0
+                    if '*issue_criteria_rainfall*' in paragraph.text:
+                        paragraph.text = ''
+                        run_text_1 = 'Rainfall in 60 minutes recorded is %s mm or more ' %criteria_60min
+                        run_1 = paragraph.add_run(run_text_1)
+                        if rainfall_60min[0]:
+                            run_1.font.color.rgb = RGBColor(255, 0, 0)
+                        run_text_2 = '(or '
+                        paragraph.add_run(run_text_2)
+                        run_text_3 = '%s mm or more in 30 minutes' %criteria_30min
+                        run_2 = paragraph.add_run(run_text_3)
+                        if rainfall_30min[0]:
+                            run_2.font.color.rgb = RGBColor(255, 0, 0)
+                        run_text_4 = '); and/or'
+                        paragraph.add_run(run_text_4)
+                    if '*issue_criteria_wind_gusts*' in paragraph.text:
+                        paragraph.text = ''
+                        run_text_5 = 'Wind speeds of greater than %s km/h are recorded' %criteria_wind_gusts
+                        run_3 = paragraph.add_run(run_text_5)
+                        if wind_gusts[0]:
+                            run_3.font.color.rgb = RGBColor(255, 0, 0)
+                        run_text_6 = '; and/or'
+                        paragraph.add_run(run_text_6)
+                    if '*issue_criteria_adhoc*' in paragraph.text:
+                        paragraph.text = ''
+                        run_text_7 = 'There are ad-hoc requests by agencies eg. PUB'
+                        run_4 = paragraph.add_run(run_text_7)
+                        if adhoc_request == '1':
+                            run_4.font.color.rgb = RGBColor(255, 0, 0)
+                            
+                        
+    try:
+        document.save(path_sitrep)
+    except Exception as e:
+        print 'ERROR: Unable to save MS Word document, please check if the document is being opened'
+        print e
+
+def append_monthly_statistics():
+    '''Extract table from MS Excel spreadsheet and append to MS Word document'''
+    absolute_path_sitrep = os.path.abspath(path_sitrep)
+    absolute_path_monthly_statistics = os.path.abspath(path_monthly_statistics)
+    Config = ConfigParser.ConfigParser()
+    Config.read('heavy_rain_sitrep.ini')
+    month = int(dt.datetime.strptime(Config.get('Date', 'date'), '%d%m%y').strftime('%m'))
+    excel = client.Dispatch("Excel.Application")
+    word = client.Dispatch("Word.Application")
+    #excel.Visible = True
+    #word.Visible = True
+    try:    
+        doc = word.Documents.Open(absolute_path_sitrep)
+        book = excel.Workbooks.Open(absolute_path_monthly_statistics)
+        sheet = book.Sheets.Item('SITREP')
+        first_row_index = 1 + (month - 1)*31
+        last_row_index = first_row_index + 28
+        table_range = 'A%s:I%s' %(first_row_index, last_row_index)
+        sheet.Range(table_range).Copy()
+        doc.Tables(3).Range.PasteExcelTable(True, False, False)
+        doc.Close(SaveChanges = True)
+        book.Close(True)
+        doc = None
+        book = None
+    except Exception as e:
+        print 'ERROR: Errors encountered appending MS Excel table or calling MS Word or MS Excel'
+        print e
+    else:
+        print 'INFO: SITREP created and saved as %s' %absolute_path_sitrep
+        print end_message
+#    word.Quit()
+#    excel.Quit()
